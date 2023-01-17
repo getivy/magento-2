@@ -1,0 +1,68 @@
+<?php
+
+declare(strict_types=1);
+
+use Magento\Checkout\Block\Cart;
+
+/** @var Cart $block */
+
+$banner = $block->getBannerData();
+
+?>
+
+<button
+    x-show="isVisible"
+    x-init="initButton()"
+    x-data="initIvyPaymentCart()"
+    @click="submit()"
+    class="ivy-checkout-button ivy-express-cart-button"
+    data-cart-value="<?= $block->getQuote()->getBaseGrandTotal() ?>"
+    data-shop-category="<?= $banner->getMcc() ?>"
+    data-currency-code="<?= $block->getQuote()->getStore()->getCurrentCurrencyCode(); ?>"
+    data-locale="<?= $banner->getLocale() ?>"
+    style="visibility: hidden">
+</button>
+
+<script>
+    function initIvyPaymentCart() {
+        return {
+            isVisible: false,
+
+            initButton() {
+                this.isVisible = true;
+                window.initIvyButton();
+            },
+
+            submit() {
+                this.initExpress();
+            },
+
+            async initExpress() {
+                const linkUrl = window.BASE_URL + "ivypayment/checkout/index/express/1";
+
+                await fetch(linkUrl, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'X-Requested-With': 'XMLHttpRequest'
+                    },
+                })
+                    .then((response) => response.json())
+                    .then((result) => {
+                        const {redirectUrl} = result;
+                        if (Object.prototype.hasOwnProperty.call(window, 'startIvyCheckout')) {
+                            window.startIvyCheckout(redirectUrl, 'popup');
+                        }
+                    })
+                    .catch((error) => {
+                        dispatchMessages([
+                            {
+                                type: "error",
+                                text: error
+                            }
+                        ]);
+                    });
+            }
+        }
+    }
+</script>
