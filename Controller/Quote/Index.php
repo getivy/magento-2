@@ -139,6 +139,17 @@ class Index extends Action implements CsrfAwareActionInterface
                     'reference' => $method->getCarrierCode() . '_' . $method->getMethodCode()
                 ];
             }
+
+            // if quote is virtual and shippingMethods is empty, add free shipping with the name per mail as the carrier
+            if ($quote->isVirtual() && empty($shippingMethods)) {
+                $shippingMethods[] = [
+                    'price'     => 0,
+                    'name'      => 'E-mail',
+                    'countries' => [$customerShippingData['country']],
+                    'reference' => 'email'
+                ];
+            }
+
             $data['shippingMethods'] = $shippingMethods;
         }
 
