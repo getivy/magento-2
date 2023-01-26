@@ -119,7 +119,7 @@ class Complete extends Action implements CsrfAwareActionInterface
         $quote->setCustomerFirstname($quote->getBillingAddress()->getFirstname());
         $quote->setCustomerLastname($quote->getBillingAddress()->getLastname());
 
-        if (isset($customerData['shippingMethod']['reference'])) {
+        if (isset($customerData['shippingMethod']['reference']) && !$quote->isVirtual()) {
             $this->logger->debugApiAction($this, $quoteReservedId, 'Apply shipping method',
                 [$customerData['shippingMethod']['reference']]
             );
