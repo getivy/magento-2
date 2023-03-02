@@ -21,6 +21,7 @@ use Magento\Framework\Controller\Result\JsonFactory;
 use Magento\Framework\Controller\Result\RedirectFactory;
 use Magento\Quote\Api\CartRepositoryInterface;
 use Magento\Quote\Model\Cart\CartTotalRepository;
+use Magento\Framework\App\Config\ScopeConfigInterface;
 
 class Index extends Action
 {
@@ -36,6 +37,8 @@ class Index extends Action
     protected $errorResolver;
     protected $apiHelper;
     protected $discountHelper;
+    protected $logo;
+    protected $scopeConfig;
 
     /**
      * @param Context $context
@@ -53,20 +56,23 @@ class Index extends Action
      * @param DiscountHelper $discountHelper
      */
     public function __construct(
-        Context                 $context,
-        JsonFactory             $jsonFactory,
-        RedirectFactory         $resultRedirectFactory,
-        Session                 $checkoutSession,
+        Context $context,
+        JsonFactory $jsonFactory,
+        RedirectFactory $resultRedirectFactory,
+        Session $checkoutSession,
         CartRepositoryInterface $quoteRepository,
-        Config                  $config,
-        Onepage                 $onePage,
-        IvyFactory              $ivy,
-        CartTotalRepository     $cartTotalRepository,
-        Logger                  $logger,
-        ErrorResolver           $errorResolver,
-        ApiHelper               $apiHelper,
-        DiscountHelper           $discountHelper
-    ) {
+        Config $config,
+        Onepage $onePage,
+        IvyFactory $ivy,
+        CartTotalRepository $cartTotalRepository,
+        Logger $logger,
+        ErrorResolver $errorResolver,
+        ApiHelper $apiHelper,
+        DiscountHelper $discountHelper,
+        \Magento\Theme\Block\Html\Header\Logo $logo,
+        ScopeConfigInterface $scopeConfig
+    )
+    {
         $this->jsonFactory = $jsonFactory;
         $this->resultRedirectFactory = $resultRedirectFactory;
         $this->checkoutSession = $checkoutSession;
@@ -79,6 +85,8 @@ class Index extends Action
         $this->errorResolver = $errorResolver;
         $this->apiHelper = $apiHelper;
         $this->discountHelper = $discountHelper;
+        $this->logo = $logo;
+        $this->scopeConfig = $scopeConfig;
         parent::__construct($context);
     }
     public function execute()
@@ -113,7 +121,7 @@ class Index extends Action
 
         $plugin = $this->getPluginVersion();
 
-        if($express) {
+        if ($express) {
             $phone = ['phone' => true];
             $data = [
                 'express' => true,
@@ -132,7 +140,7 @@ class Index extends Action
                 'category' => $mcc,
                 'price' => $price,
                 'lineItems' => $ivyLineItems,
-                'shippingMethods' =>  $shippingMethods,
+                'shippingMethods' => $shippingMethods,
                 'billingAddress' => $billingAddress,
                 'prefill' => $prefill,
                 'plugin' => $plugin,
@@ -141,27 +149,28 @@ class Index extends Action
 
         $path = $this->scopeConfig->getValue(
             'design/header/logo_src',
-            \Magento\Store\Model\ScopeInterface::SCOPE_STORE
+                \Magento\Store\Model\ScopeInterface::SCOPE_STORE
         );
-        if($path)
-        {
-            $shopLogo = $this->urlBuilder
-                ->getBaseUrl(['_type' => \Magento\Framework\UrlInterface::URL_TYPE_MEDIA]) .'logo/'. $path;
-        }
-        else{
+        if ($path) {
+            $shopLogo = $this->_url->getUrl('logo/' . $path);
+        } else {
             $shopLogo = $this->logo->getLogoSrc();
         }
 
         $data = array_merge($data, [
-            'successCallbackUrl'    => $this->_url->getUrl('ivypayment/success'),
-            'errorCallbackUrl'      => $this->_url->getUrl('ivypayment/fail'),
-            'quoteCallbackUrl'      => $this->_url->getUrl('ivypayment/quote'),
-            'webhookUrl'            => $this->_url->getUrl('ivypayment/webhook'),
-            'completeCallbackUrl'   => $this->_url->getUrl('ivypayment/order/complete'),
-            'shopLogo'              => $shopLogo,
+            'successCallbackUrl' => $this->_url->getUrl('ivypayment/success'),
+            'errorCallbackUrl' => $this->_url->getUrl('ivypayment/fail'),
+            'quoteCallbackUrl' => $this->_url->getUrl('ivypayment/quote'),
+            'webhookUrl' => $this->_url->getUrl('ivypayment/webhook'),
+            'completeCallbackUrl' => $this->_url->getUrl('ivypayment/order/complete'),
+            'shopLogo' => $shopLogo,
         ]);
 
-        $responseData = $this->apiHelper->requestApi($this, 'checkout/session/create', $data, $orderId,
+        $responseData = $this->apiHelper->requestApi(
+            $this,
+            'checkout/session/create',
+            $data,
+            $orderId,
             function ($exception) use ($quote) {
                 $this->errorResolver->tryResolveException($quote, $exception);
             }
@@ -173,7 +182,7 @@ class Index extends Action
             $ivyModel->setIvyRedirectUrl($responseData['redirectUrl']);
             $ivyModel->save();
 
-            return $this->jsonFactory->create()->setData(['redirectUrl'=> $responseData['redirectUrl']]);
+            return $this->jsonFactory->create()->setData(['redirectUrl' => $responseData['redirectUrl']]);
         }
     }
 
@@ -182,13 +191,13 @@ class Index extends Action
         $ivyLineItems = array();
         foreach ($quote->getAllVisibleItems() as $lineItem) {
             $ivyLineItems[] = [
-                'name'          => $lineItem->getName(),
-                'referenceId'   => $lineItem->getSku(),
-                'singleNet'     => $lineItem->getBasePrice(),
-                'singleVat'     => $lineItem->getBaseTaxAmount() ?: 0,
-                'amount'        => $lineItem->getBaseRowTotalInclTax() ?: 0,
-                'quantity'      => $lineItem->getQty(),
-                'image'         => '',
+                'name' => $lineItem->getName(),
+                'referenceId' => $lineItem->getSku(),
+                'singleNet' => $lineItem->getBasePrice(),
+                'singleVat' => $lineItem->getBaseTaxAmount() ?: 0,
+                'amount' => $lineItem->getBaseRowTotalInclTax() ?: 0,
+                'quantity' => $lineItem->getQty(),
+                'image' => '',
             ];
         }
 
@@ -196,10 +205,10 @@ class Index extends Action
         if ($discountAmount !== 0.0) {
             $discountAmount = -1 * abs($discountAmount);
             $ivyLineItems[] = [
-                'name'      => 'Discount',
+                'name' => 'Discount',
                 'singleNet' => $discountAmount,
                 'singleVat' => 0,
-                'amount'    => $discountAmount
+                'amount' => $discountAmount
             ];
         }
 
@@ -244,8 +253,8 @@ class Index extends Action
         $countryId = $quote->getShippingAddress()->getCountryId();
         $shippingMethod = array();
         $shippingLine = [
-            'price'     => $quote->getBaseShippingAmount() ?: 0,
-            'name'      => $quote->getShippingAddress()->getShippingMethod(),
+            'price' => $quote->getBaseShippingAmount() ?: 0,
+            'name' => $quote->getShippingAddress()->getShippingMethod(),
             'countries' => [$countryId]
         ];
 
@@ -258,16 +267,17 @@ class Index extends Action
     {
         return [
             'firstName' => $quote->getBillingAddress()->getFirstname(),
-            'LastName'  => $quote->getBillingAddress()->getLastname(),
-            'line1'     => $quote->getBillingAddress()->getStreet()[0],
-            'city'      => $quote->getBillingAddress()->getCity(),
-            'zipCode'   => $quote->getBillingAddress()->getPostcode(),
-            'country'   => $quote->getBillingAddress()->getCountryId(),
+            'LastName' => $quote->getBillingAddress()->getLastname(),
+            'line1' => $quote->getBillingAddress()->getStreet()[0],
+            'city' => $quote->getBillingAddress()->getCity(),
+            'zipCode' => $quote->getBillingAddress()->getPostcode(),
+            'country' => $quote->getBillingAddress()->getCountryId(),
         ];
     }
 
-    private function getPluginVersion(): string {
+    private function getPluginVersion(): string
+    {
         $composerJson = json_decode(file_get_contents(__DIR__ . '/../../composer.json'), true);
-        return 'm2-'.$composerJson['version'];
+        return 'm2-' . $composerJson['version'];
     }
 }
