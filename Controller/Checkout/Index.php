@@ -139,12 +139,26 @@ class Index extends Action
             ];
         }
 
+        $path = $this->scopeConfig->getValue(
+            'design/header/logo_src',
+            \Magento\Store\Model\ScopeInterface::SCOPE_STORE
+        );
+        if($path)
+        {
+            $shopLogo = $this->urlBuilder
+                ->getBaseUrl(['_type' => \Magento\Framework\UrlInterface::URL_TYPE_MEDIA]) .'logo/'. $path;
+        }
+        else{
+            $shopLogo = $this->logo->getLogoSrc();
+        }
+
         $data = array_merge($data, [
             'successCallbackUrl'    => $this->_url->getUrl('ivypayment/success'),
             'errorCallbackUrl'      => $this->_url->getUrl('ivypayment/fail'),
             'quoteCallbackUrl'      => $this->_url->getUrl('ivypayment/quote'),
             'webhookUrl'            => $this->_url->getUrl('ivypayment/webhook'),
-            'completeCallbackUrl'   => $this->_url->getUrl('ivypayment/order/complete')
+            'completeCallbackUrl'   => $this->_url->getUrl('ivypayment/order/complete'),
+            'shopLogo'              => $shopLogo,
         ]);
 
         $responseData = $this->apiHelper->requestApi($this, 'checkout/session/create', $data, $orderId,
