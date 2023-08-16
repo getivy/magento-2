@@ -4,6 +4,7 @@ namespace Esparksinc\IvyPayment\Model\Api;
 
 use Esparksinc\IvyPayment\Helper\Api as ApiHelper;
 use Esparksinc\IvyPayment\Helper\Discount as DiscountHelper;
+use Esparksinc\IvyPayment\Helper\Quote as QuoteHelper;
 use Esparksinc\IvyPayment\Model\Config;
 use Esparksinc\IvyPayment\Model\ErrorResolver;
 use Esparksinc\IvyPayment\Model\IvyFactory;
@@ -15,14 +16,12 @@ use Magento\Framework\Filesystem\Directory\ReadFactory;
 use Magento\Framework\Serialize\Serializer\Json;
 use Magento\Framework\UrlInterface;
 use Magento\Quote\Api\CartRepositoryInterface;
-use Magento\Quote\Model\Cart\CartTotalRepository;
 use Magento\Quote\Model\Quote;
 use Magento\Theme\Block\Html\Header\Logo;
 
 class CreateCheckoutSessionService
 {
     protected $apiHelper;
-    protected $cartTotalRepository;
     protected $componentRegistrar;
     protected $config;
     protected $discountHelper;
@@ -32,6 +31,7 @@ class CreateCheckoutSessionService
     protected $logger;
     protected $logo;
     protected $quoteRepository;
+    protected $quoteHelper;
     protected $readFactory;
     protected $scopeConfig;
     protected $url;
@@ -39,7 +39,7 @@ class CreateCheckoutSessionService
     /**
      * @param ApiHelper $apiHelper
      * @param CartRepositoryInterface $quoteRepository
-     * @param CartTotalRepository $cartTotalRepository
+     * @param QuoteHelper $quoteHelper
      * @param ComponentRegistrar $componentRegistrar
      * @param Config $config
      * @param DiscountHelper $discountHelper
@@ -55,7 +55,7 @@ class CreateCheckoutSessionService
     public function __construct(
         ApiHelper                   $apiHelper,
         CartRepositoryInterface     $quoteRepository,
-        CartTotalRepository         $cartTotalRepository,
+        QuoteHelper                 $quoteHelper,
         ComponentRegistrar          $componentRegistrar,
         Config                      $config,
         DiscountHelper              $discountHelper,
@@ -69,7 +69,6 @@ class CreateCheckoutSessionService
         UrlInterface                $url
     ) {
         $this->apiHelper = $apiHelper;
-        $this->cartTotalRepository = $cartTotalRepository;
         $this->componentRegistrar = $componentRegistrar;
         $this->config = $config;
         $this->discountHelper = $discountHelper;
@@ -79,6 +78,7 @@ class CreateCheckoutSessionService
         $this->logger = $logger;
         $this->logo = $logo;
         $this->quoteRepository = $quoteRepository;
+        $this->quoteHelper = $quoteHelper;
         $this->readFactory = $readFactory;
         $this->scopeConfig = $scopeConfig;
         $this->url = $url;
@@ -128,7 +128,7 @@ class CreateCheckoutSessionService
         $data = array_merge($data, [
             'referenceId'           => $orderId,
             'category'              => $this->config->getMcc(),
-            'price'                 => $this->getPrice($quote, $express),
+            'price'                 => $this->quoteHelper->getTotalsData($quote, $express),
             'lineItems'             => $this->getLineItems($quote),
             'plugin'                => $this->getPluginVersion(),
 
@@ -186,39 +186,6 @@ class CreateCheckoutSessionService
         }
 
         return $ivyLineItems;
-    }
-
-    private function getPrice($quote, $express)
-    {
-        $totals = $this->cartTotalRepository->get($quote->getId());
-
-        $shippingNet = $totals->getBaseShippingAmount();
-        $shippingVat = $totals->getBaseShippingTaxAmount();
-        $shippingTotal = $shippingNet + $shippingVat;
-
-        $total = $totals->getBaseGrandTotal();
-        $vat = $totals->getBaseTaxAmount();
-
-        $totalNet = $total - $vat;
-
-        $currency = $quote->getBaseCurrencyCode();
-
-        if ($express) {
-            $total -= $shippingTotal;
-            $vat -= $shippingVat;
-            $totalNet -= $shippingNet;
-            $shippingTotal = 0;
-            $shippingVat = 0;
-            $shippingNet = 0;
-        }
-
-        return [
-            'totalNet' => $totalNet,
-            'vat' => $vat,
-            'shipping' => $shippingTotal,
-            'total' => $total,
-            'currency' => $currency,
-        ];
     }
 
     private function getShippingMethod($quote): array

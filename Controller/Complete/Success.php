@@ -112,8 +112,9 @@ class Success extends Action
         }
 
         $quote = $this->checkoutSession->getQuote();
+        $quote->setIsActive(0);
+        $this->quoteRepository->save($quote);
 
-        $this->quoteRepository->delete($quote);
         $this->checkoutSession->clearQuote();
 
         // TODO : this doesn't seem to work (especially for the minicart)

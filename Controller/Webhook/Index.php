@@ -21,6 +21,7 @@ use Magento\Framework\App\RequestInterface;
 use Magento\Framework\App\Request\InvalidRequestException;
 use Magento\Framework\Controller\Result\JsonFactory;
 use Magento\Framework\Exception\LocalizedException;
+use Magento\Framework\FlagManager;
 use Magento\Framework\Serialize\Serializer\Json;
 use Magento\Sales\Api\OrderRepositoryInterface;
 use Magento\Sales\Api\RefundInvoiceInterface;
@@ -30,6 +31,8 @@ use Magento\Quote\Api\CartManagementInterface;
 
 class Index extends Action implements CsrfAwareActionInterface
 {
+    const FLAG_LOCKED_QUOTES = 'ivy_locked_quotes';
+
     protected $config;
     protected $json;
     protected $jsonFactory;
@@ -42,6 +45,7 @@ class Index extends Action implements CsrfAwareActionInterface
     protected $quoteManagement;
     protected $errorResolver;
     protected $quoteHelper;
+    protected $flagManager;
 
     /**
      * @param Context $context
@@ -56,6 +60,7 @@ class Index extends Action implements CsrfAwareActionInterface
      * @param CartManagementInterface $quoteManagement
      * @param ErrorResolver $errorResolver
      * @param QuoteHelper $quoteHelper
+     * @param FlagManager $flagManager
      */
     public function __construct(
         Context                  $context,
@@ -69,7 +74,8 @@ class Index extends Action implements CsrfAwareActionInterface
         OrderRepositoryInterface $orderRepository,
         CartManagementInterface  $quoteManagement,
         ErrorResolver            $errorResolver,
-        QuoteHelper              $quoteHelper
+        QuoteHelper              $quoteHelper,
+        FlagManager              $flagManager
     ) {
         $this->config = $config;
         $this->json = $json;
@@ -82,6 +88,7 @@ class Index extends Action implements CsrfAwareActionInterface
         $this->quoteManagement = $quoteManagement;
         $this->errorResolver = $errorResolver;
         $this->quoteHelper = $quoteHelper;
+        $this->flagManager = $flagManager;
         parent::__construct($context);
     }
 
@@ -96,50 +103,80 @@ class Index extends Action implements CsrfAwareActionInterface
         $jsonContent = $request->getContent();
         $arrData = $this->json->unserialize((string)$jsonContent);
 
-        $magentoOrderId = $arrData['payload']['referenceId'];
+        // request type can be "merchant_app_updated" without paypload > referenceId field
+        $magentoOrderId = $arrData['payload']['referenceId'] ?? 'unknown';
         $this->logger->debugRequest($this, $magentoOrderId);
 
-        $quoteId = $arrData['payload']['metadata']['quote_id'] ?? null;
-        $quote = $this->quoteHelper->getQuote($magentoOrderId, $quoteId);
+        $resultStatusCode = 200;
 
         if ($arrData['type'] === 'order_updated' || $arrData['type'] === 'order_created')
         {
-            switch ($arrData['payload']['status']) {
-                case 'canceled':
-                    // do nothing.
-                    break;
-                case 'waiting_for_payment':
-                case 'paid':
-                    /** @var Order $newOrder */
-                    $newOrder = $this->createOrder($quote);
+            $quoteId = $arrData['payload']['metadata']['quote_id'] ?? null;
+            $quote = $this->quoteHelper->getQuote($magentoOrderId, $quoteId);
 
-                    // some problem happened
-                    if (!$newOrder) {
-                        return $this->jsonFactory->create()->setHttpResponseCode(400)->setData([]);
-                    }
+            $newOrderStatus = $this->config->getMapWaitingForPaymentStatus();
+            // if invoice should be created without confirmation from Ivy payment system
+            $createInvoiceImmediately = $newOrderStatus == Statuses::PAID;
 
-                    $orderStatus = $this->config->getMapWaitingForPaymentStatus();
-                    /*
-                     * If that is a "paid" callback or the order status should be "paid"
-                     */
-                    $makePaid = $arrData['payload']['status'] == 'paid' || $orderStatus == Statuses::PAID;
+            try {
+                $this->lockQuote($quote, $magentoOrderId);
 
-                    // order created
-                    if ($newOrder->canInvoice() && $makePaid) {
-                        $this->createInvoice($newOrder, $arrData);
-                    } else{
-                        /*
-                         * it support the legacy logic:
-                         * if order should but can't be invoiced then set the "processing" status
-                         */
-                        $newOrder->setStatus($makePaid ? 'processing': $orderStatus);
+                switch ($arrData['payload']['status']) {
+                    case 'canceled':
+                        // do nothing.
+                        break;
+                    case 'waiting_for_payment':
+                        /** @var Order $newOrder */
+                        $newOrder = $this->retrieveOrder($quote);
+
+                        // some problem happened
+                        if (!$newOrder) {
+                            $resultStatusCode = 400;
+                            break;
+                        }
+
+                        if ($createInvoiceImmediately && $newOrder->canInvoice()) {
+                            $this->createInvoice($newOrder, $arrData);
+                        }
+
+                        $newOrder->setStatus($createInvoiceImmediately ? 'processing': $newOrderStatus);
                         $newOrder->save();
-                    }
-                    break;
+
+                        break;
+
+                    case 'paid':
+                        /** @var Order $newOrder */
+                        $newOrder = $this->retrieveOrder($quote);
+
+                        // some problem happened
+                        if (!$newOrder) {
+                            $resultStatusCode = 400;
+                            break;
+                        }
+
+                        /*
+                         * An invoice should be created at the moment.
+                         * Return success status to Ivy but do nothing.
+                         */
+                        if ($createInvoiceImmediately) {
+                            break;
+                        }
+
+                        if ($newOrder->canInvoice()) {
+                            $this->createInvoice($newOrder, $arrData);
+                        } else {
+                            $newOrder->setStatus('processing');
+                            $newOrder->save();
+                        }
+
+                        break;
+                }
+            } finally {
+                $this->unlockQuote($quote);
             }
         }
 
-        return $this->jsonFactory->create()->setHttpResponseCode(200)->setData([]);
+        return $this->jsonFactory->create()->setHttpResponseCode($resultStatusCode)->setData([]);
     }
 
     public function createCsrfValidationException(RequestInterface $request): ? InvalidRequestException
@@ -200,16 +237,61 @@ class Index extends Action implements CsrfAwareActionInterface
 
     private function createInvoice(Order $orderdetails, $arrData)
     {
-        // dont invoice if invoice with ivy as payment already exists
+        $ivyOrderId = $arrData['payload']['id'];
+
+        // don't invoice if invoice with ivy as payment already exists
         $invoices = $orderdetails->getInvoiceCollection();
         foreach ($invoices as $invoice) {
-            if ($invoice->getTransactionId() === $arrData['payload']['id']) {
+            if ($invoice->getTransactionId() === $ivyOrderId) {
                 return;
             }
         }
 
-        $ivyOrderId = $arrData['payload']['id'];
         $this->invoiceHelper->createInvoice($orderdetails, $ivyOrderId);
+    }
+
+    /**
+     * This method should prevent race conditions between webhooks
+     *
+     * @param $quote
+     * @param $magentoOrderId
+     * @return void
+     */
+    private function lockQuote($quote, $magentoOrderId)
+    {
+        $quoteId = $quote->getId();
+        $lockedQuotesIds = (array)$this->flagManager->getFlagData(self::FLAG_LOCKED_QUOTES);
+
+        /*
+         * If locker exists then wait 5 seconds and process the webhook anyway.
+         */
+        $counter = 0;
+        while (array_key_exists($quoteId, $lockedQuotesIds)) {
+            if ($counter > 10) {
+                $this->logger->debugApiAction($this, $magentoOrderId, 'Timeout of quote lock',
+                    ['quote_id' => $quoteId]
+                );
+                break;
+            }
+
+            $counter++;
+            // wait 500 milliseconds
+            usleep(500*1000);
+
+            $lockedQuotesIds = (array)$this->flagManager->getFlagData(self::FLAG_LOCKED_QUOTES);
+        }
+
+        if (!array_key_exists($quoteId, $lockedQuotesIds)) {
+            $lockedQuotesIds[$quoteId] = 1;
+            $this->flagManager->saveFlag(self::FLAG_LOCKED_QUOTES, $lockedQuotesIds);
+        }
+    }
+
+    private function unlockQuote($quote)
+    {
+        $lockedQuotesIds = (array)$this->flagManager->getFlagData(self::FLAG_LOCKED_QUOTES);
+        unset($lockedQuotesIds[$quote->getId()]);
+        $this->flagManager->saveFlag(self::FLAG_LOCKED_QUOTES, $lockedQuotesIds);
     }
 
     /**
@@ -238,10 +320,12 @@ class Index extends Action implements CsrfAwareActionInterface
     }
 
     /**
+     * Create or load already exists order
+     *
      * @param $quote
      * @return false|\Magento\Sales\Api\Data\OrderInterface|null
      */
-    private function createOrder($quote)
+    private function retrieveOrder($quote)
     {
         // check if order already exists for this quote
         $order = $this->loadOrderByQuoteId($quote->getId());

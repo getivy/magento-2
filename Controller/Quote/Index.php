@@ -20,7 +20,6 @@ use Magento\Framework\App\RequestInterface;
 use Magento\Framework\App\Request\InvalidRequestException;
 use Magento\Framework\Controller\Result\JsonFactory;
 use Magento\Framework\Serialize\Serializer\Json;
-use Magento\Quote\Model\Cart\CartTotalRepository;
 use Magento\Quote\Model\QuoteRepository;
 use Magento\Quote\Model\ShippingMethodManagement;
 
@@ -32,7 +31,6 @@ class Index extends Action implements CsrfAwareActionInterface
     protected $scopeConfig;
     protected $quoteRepository;
     protected $regionFactory;
-    protected $cartTotalRepository;
     protected $logger;
     protected $shippingMethodManagement;
     protected $discountHelper;
@@ -47,7 +45,6 @@ class Index extends Action implements CsrfAwareActionInterface
      * @param ScopeConfigInterface $scopeConfig
      * @param QuoteRepository $quoteRepository
      * @param RegionFactory $regionFactory
-     * @param CartTotalRepository $cartTotalRepository
      * @param Logger $logger
      * @param ShippingMethodManagement $shippingMethodManagement
      * @param DiscountHelper $discountHelper
@@ -60,7 +57,6 @@ class Index extends Action implements CsrfAwareActionInterface
         ScopeConfigInterface     $scopeConfig,
         QuoteRepository          $quoteRepository,
         RegionFactory            $regionFactory,
-        CartTotalRepository      $cartTotalRepository,
         Logger                   $logger,
         ShippingMethodManagement $shippingMethodManagement,
         DiscountHelper           $discountHelper,
@@ -72,7 +68,6 @@ class Index extends Action implements CsrfAwareActionInterface
         $this->scopeConfig = $scopeConfig;
         $this->quoteRepository = $quoteRepository;
         $this->regionFactory = $regionFactory;
-        $this->cartTotalRepository = $cartTotalRepository;
         $this->logger = $logger;
         $this->shippingMethodManagement = $shippingMethodManagement;
         $this->discountHelper = $discountHelper;
@@ -91,6 +86,8 @@ class Index extends Action implements CsrfAwareActionInterface
 
         $quoteId = $customerData['metadata']['quote_id'] ?? null;
         $quote = $this->quoteHelper->getQuote($magentoOrderId, $quoteId);
+
+        $initialTotalsData = $this->quoteHelper->getTotalsData($quote, true);
 
         if (!$quote->getCustomerId()) {
             $quote->setCustomerEmail($customerData['shopperEmail']);
@@ -164,23 +161,21 @@ class Index extends Action implements CsrfAwareActionInterface
         //Get discount
         $discountAmount = $this->discountHelper->getDiscountAmount($quote);
         if ($discountAmount !== 0.0) {
-            $totals = $this->cartTotalRepository->get($quote->getId());
-
-            $shippingNet = $totals->getBaseShippingAmount();
-            $shippingVat = $totals->getBaseShippingTaxAmount();
-            $shippingTotal = $shippingNet + $shippingVat;
-
-            $total = $totals->getBaseGrandTotal() - $shippingTotal;
-            $vat = $totals->getBaseTaxAmount() - $shippingVat;
-            $totalNet = $total - $vat;
-
             $data['discount'] = [
                 'amount'    => abs($discountAmount)
             ];
+        }
+
+        /*
+         * This callback receives shipping address that can lead to recalculate taxes.
+         * We should check all price changes on Magento side and send it to Ivy
+         */
+        $totalsData = $this->quoteHelper->getTotalsData($quote, true);
+        if ($totalsData['total'] != $initialTotalsData['total']) {
             $data['price'] = [
-                'totalNet'  => $totalNet,
-                'vat'       => $vat,
-                'total'     => $total
+                'totalNet'  => $totalsData['totalNet'],
+                'vat'       => $totalsData['vat'],
+                'total'     => $totalsData['total']
             ];
         }
 

@@ -95,7 +95,9 @@ class Index extends Action
         }
 
         $orderdetails = $this->order->create()->loadByIncrementId($magentoOrderId);
-        $this->invoiceHelper->createInvoice($orderdetails, $ivyOrderId);
+        if ($orderdetails->canInvoice()) {
+            $this->invoiceHelper->createInvoice($orderdetails, $ivyOrderId);
+        }
 
         $this->logger->debugApiAction($this, $magentoOrderId, 'Order', $orderdetails->getData());
 
