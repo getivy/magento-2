@@ -1,0 +1,10 @@
+<?xml version="1.0"?>
+<page xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+      xsi:noNamespaceSchemaLocation="urn:magento:framework:View/Layout/etc/page_configuration.xsd">
+    <body>
+        <referenceBlock name="ivy.checkout.button.additional"
+                        template="Esparksinc_IvyPayment::catalog/hyva_ivyexpress-button.phtml"/>
+        <referenceBlock name="ivy.checkout.button" remove="true"/>
+        <move element="ivy.checkout.button.additional" destination="product.info.additional"/>
+    </body>
+</page>
